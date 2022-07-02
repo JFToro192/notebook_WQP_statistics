@@ -30,13 +30,16 @@ class wqp:
     
     # Read the datasets using rasterio
     def readWQP(self):
+        
         self.image = rasterio.open(self.path)
         
     # Close the dataset using rasterio
     def closeWQP(self):
+        
         self.image.close()
         
     def writeWQP(self, out_path, array):
+        
         # Register GDAL format drivers and configuration options with a
         # context manager.
         with rasterio.Env():
@@ -177,21 +180,22 @@ class wqp:
             # Verify that the computed thresholds are smaller/greater than the min/max arguments (if input)
             lowerBound = self.stats[key]['percentile_25'] - 1.5*IQR
             upperBound = self.stats[key]['percentile_75'] + 1.5*IQR
-            if ( minLower != None and lowerBound>minLower ):
+            if ( minLower != None and lowerBound<minLower ):
                 lowerBound = minLower
-            if ( maxUpper != None and upperBound<maxUpper ):
+            if ( maxUpper != None and upperBound>maxUpper ):
                 upperBound = maxUpper
 
             raster = self.crops[key]['crop']
 
             # Identify the number of outliers for each threshold
-            countLower = sum(sum(sum(raster<=lowerBound)))
-            countUpper = sum(sum(sum(raster>=upperBound)))
-            countTotal = countLower + countUpper
+            raster[raster==0] = np.nan
+            countLower = np.nansum(raster<=lowerBound)
+            countUpper = np.nansum(raster>=upperBound)
+            countTotal = np.nansum(raster)
             # Extract the outliers values to the corresponding thresholds
             raster[raster<=lowerBound] = np.nan
             raster[raster>=upperBound] = np.nan
-            percValid = countTotal / raster.size
+            percValid = np.nansum(raster) / countTotal
 
             # Extract outliers from the crop raster
             outliers = self.crops[key]['crop']
@@ -215,28 +219,65 @@ class wqp:
         return orDict
         
     
-    def outlierRejectionSigma(src, transform, out_path, stats, n_std):
+    def outlierDetectionMethods(stats, method):
+        #TODO: compute the boundaries depending according to the selected method. Pass the limits to the outlier rejection method        
+        return "Hello"
         
-        # Compute the thresholds for the outlier rejection method
-        lowerBound = stats.mean - n_std*stats.std
-        upperBound = stats.mean + n_std*stats.std
+    
+    def outlierRejection(self, method=None, minLower=None, maxUpper=None):
+        orDict = dict()       
         
-        # Identify the number of outliers for each threshold
-        countLower = sum(raster<=lowerBound)
-        countUpper = sum(raster<=lowerBound)
-        countTotal = countLower + countUpper
-        percOutliers = countTotal / cropped_image.size
+        for key in self.crops:
+            orDict[key] = dict() 
+            # Compute the thresholds for the outlier rejection method
+            IQR = self.stats[key]['percentile_75'] - self.stats[key]['percentile_25']
+            # Verify that the computed thresholds are smaller/greater than the min/max arguments (if input)
+            lowerBound = self.stats[key]['percentile_25'] - 1.5*IQR
+            upperBound = self.stats[key]['percentile_75'] + 1.5*IQR
+            if ( minLower != None and lowerBound<minLower ):
+                lowerBound = minLower
+            if ( maxUpper != None and upperBound>maxUpper ):
+                upperBound = maxUpper
+
+            raster = self.crops[key]['crop']
+
+            # Identify the number of outliers for each threshold
+            raster[raster==0] = np.nan
+            countLower = np.nansum(raster<=lowerBound)
+            countUpper = np.nansum(raster>=upperBound)
+            countTotal = np.nansum(raster)
+            # Extract the outliers values to the corresponding thresholds
+            raster[raster<=lowerBound] = np.nan
+            raster[raster>=upperBound] = np.nan
+            percValid = np.nansum(raster) / countTotal
+
+            # Extract outliers from the crop raster
+            outliers = self.crops[key]['crop']
+            outliers[outliers<=lowerBound] = np.nan
+            outliers[outliers>=upperBound] = np.nan        
+
+            # Organize results in dictionary
+            orDict[key]['Method'] = method
+            orDict[key]['lowerBound'] = lowerBound
+            orDict[key]['upperBound'] = upperBound
+            orDict[key]['countLower'] = countLower
+            orDict[key]['countUpper'] = countUpper
+            orDict[key]['countTotal'] = countTotal
+            orDict[key]['percValid'] = percValid
+            orDict[key]['percOutliers'] = 1 - percValid
+
+            # Save raster with no outliers
+            orDict[key]['raster'] = wqp.create_dataset(raster, self.image.crs, self.crops[key]['transform'])
+            orDict[key]['outliers'] = wqp.create_dataset(outliers, self.image.crs, self.crops[key]['transform'])
         
-        # Extract the outliers values to the corresponding thresholds
-        raster = src.image.read(1)
-        raster[raster<=lowerBound] = np.nan
-        raster[raster>=upperBound] = np.nan
+        return orDict
     
         
     """
     CROP RASTER LAYER BY FEATURES
     """
     def cropRasterByFeatures(self, vectorData_path, nameField):
+        
         crops = dict()
         shapes = wqp.importVector(vectorData_path, nameField)
         for key in shapes:
@@ -248,4 +289,6 @@ class wqp:
             crop_shape['transform'] = cropped_transform
             crops[key] = crop_shape
         self.crops = crops
+
+    
             
