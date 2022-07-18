@@ -11,26 +11,29 @@ from rasterio.io import MemoryFile
 from rasterstats import zonal_stats, point_query
 
 class wqp:
-    
+
     # Extract the metadata of the datasets    
     def __init__(self, path):
         # Sentinel-3 
         date_format = "%Y%m%dT%H%M%S" 
-        
+        temp_path = path.split('\\')
+        temp_path = '/'.join(temp_path)
         temp_path = path.split('\\')
         name = temp_path[-1].split('.')[0]
         self.path = path
         self.name = name
-        self.sensor = name.split('_')[0]
+        self.sensor = name.split('/')[-1].split('_')[0]
         self.typology = name.split('_')[1]
         self.crs = name.split('_')[2]
-        if (self.sensor in ['S3A','S3B']):
-            self.date = datetime.strptime(name.split('_')[3], date_format)
+        if (self.sensor in ['S3','S3A','S3B']):
+            if name.split('_')[-2] != 'Oa':
+                self.date = datetime.strptime(name.split('_')[-2], date_format)
+            else:
+                self.date = datetime.strptime(name.split('_')[2], date_format)
         
     
     # Read the datasets using rasterio
     def readWQP(self):
-        
         self.image = rasterio.open(self.path)
         
     # Close the dataset using rasterio
@@ -46,6 +49,7 @@ class wqp:
 
             # Write an array as a raster band to a new 8-bit file. For
             # the new file's profile, we start with the profile of the source
+            
             profile = self.image.profile
 
             # And then change the band count to 1, set the
@@ -53,9 +57,15 @@ class wqp:
             profile.update(
                 dtype=rasterio.float64,
                 count=1,
-                compress='lzw')
+                # compress='lzw'
+                )
 
-            with rasterio.open(os.path.join(out_path,self.name+'.tif'), 'w', **profile) as dst:
+            if self.typology == 'oa':
+                f_name = os.path.join(out_path+'.tif')
+            else:
+                f_name = os.path.join(out_path)
+
+            with rasterio.open(f_name, 'w', **profile) as dst:
                 dst.write(array.astype(rasterio.float64), 1)
     
     # Compute the zonal statistics for a reference raster and polygon
@@ -77,22 +87,21 @@ class wqp:
     # Extract point data from the reference product for single band raster
     def extractSamplePoints(self, vectorData):
         obs = []
-        
-        for point in vectorData['geometry']:
-          
-            x = point.xy[0][0]
-            y = point.xy[1][0]
+        for i, point in vectorData.iterrows():
+            n = point[0] 
+            x = point[2].xy[0][0]
+            y = point[2].xy[1][0]
             row, col = self.image.index(x,y)
             try:
                 value = self.image.read(1)[row,col]
+                o = [n, x,y,row,col,value]
+                obs.append(o)
             except:
                 print(x,',',y,' coordinates are out of the image')
             
-            o = [x,y,row,col,value]
-            
-            obs.append(o)
+      
         
-        df = pd.DataFrame(obs, columns = ['x','y','row','col',self.typology])
+        df = pd.DataFrame(obs, columns = ['id','x','y','row','col',self.typology])
         
         self.samplePoint = df
         
@@ -120,7 +129,6 @@ class wqp:
         con = np.concatenate((cols,stats_keys))
 
         df = pd.DataFrame([d])
-        
         df = df.reindex(columns = con)
         
         return df
@@ -129,18 +137,19 @@ class wqp:
     """
     DEFINE THE PROCESSING AND STORING FUNCTIONS
     """
-    def saveMaskedImage(out_path,in_file,data,transf):
-        with rasterio.open(in_file) as src:
-            profile = src.profile.copy()
-            profile.update({
-                    'dtype': 'float64',
-                    'height': data.shape[0],
-                    'width': data.shape[1],
-                    'transform': transf
-             })  
+    # Single feature crop save. Default saved band: 0.
+    def saveMaskedImage(self,out_path,NameFeature, band=0):
+        profile = self.image.profile.copy()
+        profile.update({
+                'dtype': 'float32',
+                'height': self.crops[NameFeature]['crop'][0].shape[0],
+                'width': self.crops[NameFeature]['crop'][0].shape[1],
+                'count': 1,
+                'transform': self.crops[NameFeature]['transform']
+            })  
 
         with rasterio.open(out_path, 'w', **profile) as dst:
-            dst.write_band(1, data)
+            dst.write_band(1, self.crops[NameFeature]['crop'][band-1])
         
     """
     IMPORT THE INDEPENDENT LAYERS FOR THE LAKES
@@ -267,8 +276,8 @@ class wqp:
             orDict[key]['percOutliers'] = 1 - percValid
 
             # Save raster with no outliers
-            orDict[key]['raster'] = wqp.create_dataset(raster, self.image.crs, self.crops[key]['transform'])
-            orDict[key]['outliers'] = wqp.create_dataset(outliers, self.image.crs, self.crops[key]['transform'])
+#             orDict[key]['raster'] = wqp.create_dataset(raster, self.image.crs, self.crops[key]['transform'])
+#             orDict[key]['outliers'] = wqp.create_dataset(outliers, self.image.crs, self.crops[key]['transform'])
         
         return orDict
     
@@ -276,7 +285,7 @@ class wqp:
     """
     CROP RASTER LAYER BY FEATURES
     """
-    def cropRasterByFeatures(self, vectorData_path, nameField):
+    def cropRasterByFeatures(self, vectorData_path, nameField, band=None):
         
         crops = dict()
         shapes = wqp.importVector(vectorData_path, nameField)
@@ -284,11 +293,22 @@ class wqp:
             crop_shape = dict()
             featureName = key
             featureGeometry = shapes[key]['geometry']
-            cropped_image, cropped_transform = rasterio.mask.mask(self.image, featureGeometry, crop=True)
+            cropped_image, cropped_transform = rasterio.mask.mask(self.image, featureGeometry, crop=True, all_touched=False, nodata=np.nan)
             crop_shape['crop'] = cropped_image
             crop_shape['transform'] = cropped_transform
             crops[key] = crop_shape
         self.crops = crops
 
-    
+    """
+    CREATE DATASET
+    """
+    def create_dataset(self, data, transform):
+        # Receives a 2D array, a transform and a crs to create a rasterio dataset
+
+        memfile = MemoryFile()
+        dataset = memfile.open(driver='GTiff', height=data.shape[0], width=data.shape[1], count=1, crs=self.image.crs, 
+                               transform=transform, dtype=data.dtype)
+        dataset.write(data,1)
+
+        return dataset
             

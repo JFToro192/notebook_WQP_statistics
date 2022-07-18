@@ -63,6 +63,7 @@ def inputParameters(sensor_input, sensor_output):
         'out_oa':os.path.join(sensor_output,'oa'),
         'out_rrs':os.path.join(sensor_output,'rrs'),
         'out_wqp':os.path.join(sensor_output,'wqp'),
+        'out_wqp_no_clip':os.path.join(sensor_output,'wqp_no_clip'),
         'out_wqp_cloud':os.path.join(sensor_output,'wqp_cloud_mask'),
         'out_wqp_no_mask':os.path.join(sensor_output,'wqp_no_mask'),
         'in_parameters': '.\in\data\satellite_imagery\wqp_parameters',

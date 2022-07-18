@@ -103,6 +103,16 @@ params_bandMaths = [
                     'expression' : "if simile_laghi and not (Cloud_risk or Rtosa_OOS or Rtosa_OOR or Rhow_OOR) then ('conc_tsm') else NaN",
                 },
                 {
+                    'name' : 'chl_no_clip',
+                    'type' : 'float32',
+                    'expression' : "if not (Cloud_risk or Rtosa_OOS or Rtosa_OOR or Rhow_OOR) then ('conc_chl') else NaN",
+                },
+                {
+                    'name' : 'tsm_no_clip',
+                    'type' : 'float32',
+                    'expression' : "if not (Cloud_risk or Rtosa_OOS or Rtosa_OOR or Rhow_OOR) then ('conc_tsm') else NaN",
+                },
+                {
                     'name' : 'chl_no_mask',
                     'type' : 'float32',
                     'expression' : 'conc_chl',
@@ -474,6 +484,25 @@ params_bandExtractor_tsm = [
     }
 ]
 
+# Extract CHL C2RCC estimates
+params_bandExtractor_chl_no_clip = [
+    {
+        'operator':'bandsExtractorOp'
+    },
+    {
+        "sourceBandNames":"chl_no_clip",
+    }
+]
+
+# Extract TSM C2RCC estimates
+params_bandExtractor_tsm_no_clip = [
+    {
+        'operator':'bandsExtractorOp'
+    },
+    {
+        "sourceBandNames":"tsm_no_clip",
+    }
+]
 
 # Extract CHL C2RCC estimates
 params_bandExtractor_chl_no_masks = [
