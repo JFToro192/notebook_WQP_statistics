@@ -179,10 +179,6 @@ def resultsWQPvalues(df, WQP_INPUT, BASIN):
             RES_DA_VALUES.append(temp)
     return RES_DA_VALUES
 
-# def buildObservations():
-#     print('bruh')
-    
-# def ingestObservation():
-#     print('meme')
+#
     
     
