@@ -14,8 +14,6 @@ class wqp:
 
     # Extract the metadata of the datasets    
     def __init__(self, path):
-        # Sentinel-3 
-        date_format = "%Y%m%dT%H%M%S" 
         temp_path = path.split('\\')
         temp_path = '/'.join(temp_path)
         temp_path = path.split('\\')
@@ -25,12 +23,18 @@ class wqp:
         self.sensor = name.split('/')[-1].split('_')[0]
         self.typology = name.split('_')[1]
         self.crs = name.split('_')[2]
+        # Sentinel-3 
         if (self.sensor in ['S3','S3A','S3B']):
+            date_format = "%Y%m%dT%H%M%S" 
             if name.split('_')[-2] != 'Oa':
                 self.date = datetime.strptime(name.split('_')[-2], date_format)
             else:
                 self.date = datetime.strptime(name.split('_')[2], date_format)
-        
+        # Landsat-8
+        elif (self.sensor in ['L8']):
+            date_format = "%Y%m%d"
+            if name.split('_')[-2] != 'Oa':
+                self.date = datetime.strptime(name.split('_')[-2], date_format)        
     
     # Read the datasets using rasterio
     def readWQP(self):
@@ -38,7 +42,6 @@ class wqp:
         
     # Close the dataset using rasterio
     def closeWQP(self):
-        
         self.image.close()
         
     def writeWQP(self, out_path, array):
@@ -55,7 +58,7 @@ class wqp:
             # And then change the band count to 1, set the
             # dtype to uint8, and specify LZW compression.
             profile.update(
-                dtype=rasterio.float64,
+                dtype=rasterio.float32,
                 count=1,
                 # compress='lzw'
                 )
@@ -66,7 +69,8 @@ class wqp:
                 f_name = os.path.join(out_path)
 
             with rasterio.open(f_name, 'w', **profile) as dst:
-                dst.write(array.astype(rasterio.float64), 1)
+                dst.write(array.astype(rasterio.float32), 1)
+           
     
     # Compute the zonal statistics for a reference raster and polygon
     def computeStatistics(self, vectorData, nameField, stats, nodata):
@@ -98,8 +102,6 @@ class wqp:
                 obs.append(o)
             except:
                 print(x,',',y,' coordinates are out of the image')
-            
-      
         
         df = pd.DataFrame(obs, columns = ['id','x','y','row','col',self.typology])
         
@@ -113,8 +115,28 @@ class wqp:
                 d['{}_{}'.format(key_stat,key_feature)] = d_stats[key_feature][key_stat]
         return d
     
-    def exportWQPFormatEstimates(src):
+    def exportWQPFormatStats(src):
         d = wqp.organizeWQPEstimates(src.stats)
+        stats_keys = list(d.keys())
+        
+        #TODO: exception on null value for the samplePoints
+        d['name'] = src.name
+        d['path'] = src.path
+        d['sensor'] = src.sensor
+        d['typology'] = src.typology
+        d['crs'] = src.crs
+        d['date'] = src.date
+        
+        cols = ['name','path', 'sensor', 'typology', 'crs', 'date']
+        con = np.concatenate((cols,stats_keys))
+
+        df = pd.DataFrame([d])
+        df = df.reindex(columns = con)
+        
+        return df
+    
+    def exportWQPFormatStatsOutliers(src):
+        d = wqp.organizeWQPEstimates(src.outliers_stats)
         stats_keys = list(d.keys())
         
         #TODO: exception on null value for the samplePoints
@@ -163,90 +185,65 @@ class wqp:
                 shapes[feature['properties'][nameField]]["geometry"] = [feature["geometry"]]
         return shapes
 
-    """
-    CREATE DATASET
-    """
-    def create_dataset(data, crs, transform):
-        # Receives a 3D array, a transform and a crs to create a rasterio dataset
+#     """
+#     CREATE DATASET
+#     """
+#     def create_dataset(data, crs, transform):
+#         # Receives a 3D array, a transform and a crs to create a rasterio dataset
 
-        memfile = MemoryFile()
-        dataset = memfile.open(driver='GTiff', height=data.shape[0], width=data.shape[1], count=1, crs=crs, 
-                               transform=transform, dtype=data.dtype)
-        dataset.write(data)
+#         memfile = MemoryFile()
+#         dataset = memfile.open(driver='GTiff', height=data.shape[0], width=data.shape[1], count=1, crs=crs, 
+#                                transform=transform, dtype=data.dtype)
+#         dataset.write(data)
 
-        return dataset
+#         return dataset
      
     """
     METHODS FOR DETECTING OUTLIERS THROUGH THRESHOLDS
     """
-    def outlierRejectionIQR(self, out_path, minLower=None, maxUpper=None):
-        orDict = dict()       
-        
-        for key in self.crops:
-            orDict[key] = dict() 
-            # Compute the thresholds for the outlier rejection method
-            IQR = self.stats[key]['percentile_75'] - self.stats[key]['percentile_25']
-            # Verify that the computed thresholds are smaller/greater than the min/max arguments (if input)
-            lowerBound = self.stats[key]['percentile_25'] - 1.5*IQR
-            upperBound = self.stats[key]['percentile_75'] + 1.5*IQR
-            if ( minLower != None and lowerBound<minLower ):
-                lowerBound = minLower
-            if ( maxUpper != None and upperBound>maxUpper ):
-                upperBound = maxUpper
-
-            raster = self.crops[key]['crop']
-
-            # Identify the number of outliers for each threshold
-            raster[raster==0] = np.nan
-            countLower = np.nansum(raster<=lowerBound)
-            countUpper = np.nansum(raster>=upperBound)
-            countTotal = np.nansum(raster)
-            # Extract the outliers values to the corresponding thresholds
-            raster[raster<=lowerBound] = np.nan
-            raster[raster>=upperBound] = np.nan
-            percValid = np.nansum(raster) / countTotal
-
-            # Extract outliers from the crop raster
-            outliers = self.crops[key]['crop']
-            outliers[outliers<=lowerBound] = np.nan
-            outliers[outliers>=upperBound] = np.nan        
-
-            # Organize results in dictionary
-            orDict[key]['IQR'] = IQR
-            orDict[key]['lowerBound'] = lowerBound
-            orDict[key]['upperBound'] = upperBound
-            orDict[key]['countLower'] = countLower
-            orDict[key]['countUpper'] = countUpper
-            orDict[key]['countTotal'] = countTotal
-            orDict[key]['percValid'] = percValid
-            orDict[key]['percOutliers'] = 1 - percValid
-
-            # Save raster with no outliers
-            orDict[key]['raster'] = wqp.create_dataset(raster, self.image.crs, self.crops[key]['transform'])
-            orDict[key]['outliers'] = wqp.create_dataset(outliers, self.image.crs, self.crops[key]['transform'])
-        
-        return orDict
-        
-    
     def outlierDetectionMethods(stats, method):
         #TODO: compute the boundaries depending according to the selected method. Pass the limits to the outlier rejection method        
-        return "Hello"
+        #methods_list = ['IQR', '2Sigma', '3Sigma']
+        bounds = dict()
+        if method == 'IQR':
+            IQR = stats['percentile_75'] - stats['percentile_25']
+            lowerBound = stats['percentile_25'] - 1.5*IQR
+            upperBound = stats['percentile_75'] + 1.5*IQR
+        elif method == '2Sigma':
+            lowerBound = stats['mean'] - 2*stats['std']
+            upperBound = stats['mean'] + 2*stats['std']
+        elif method == '3Sigma':
+            lowerBound = stats['mean'] - 3*stats['std']
+            upperBound = stats['mean'] + 3*stats['std']
         
+        bounds['lowerBound'] = lowerBound
+        bounds['upperBound'] = upperBound
+        
+        return bounds
     
     def outlierRejection(self, method=None, minLower=None, maxUpper=None):
-        orDict = dict()       
-        
+        orDict = dict()  
+        raster_collection = dict()
+        outliers_collection = dict()
         for key in self.crops:
             orDict[key] = dict() 
-            # Compute the thresholds for the outlier rejection method
-            IQR = self.stats[key]['percentile_75'] - self.stats[key]['percentile_25']
+            stats = self.stats[key]
+            if (method != None):
+                try:
+                    bounds = wqp.outlierDetectionMethods(stats, method)
+                except:
+                    print('Select one of the available methods')
+            else:
+                bounds = {'lowerBound':minLower,'upperBound': maxUpper}
+            
+            lowerBound = bounds['lowerBound']
+            upperBound = bounds['upperBound']
+            
             # Verify that the computed thresholds are smaller/greater than the min/max arguments (if input)
-            lowerBound = self.stats[key]['percentile_25'] - 1.5*IQR
-            upperBound = self.stats[key]['percentile_75'] + 1.5*IQR
             if ( minLower != None and lowerBound<minLower ):
-                lowerBound = minLower
+                bounds['lowerBound'] = minLower
             if ( maxUpper != None and upperBound>maxUpper ):
-                upperBound = maxUpper
+                bounds['upperBound'] = maxUpper
 
             raster = self.crops[key]['crop']
 
@@ -256,14 +253,12 @@ class wqp:
             countUpper = np.nansum(raster>=upperBound)
             countTotal = np.nansum(raster)
             # Extract the outliers values to the corresponding thresholds
-            raster[raster<=lowerBound] = np.nan
-            raster[raster>=upperBound] = np.nan
+            raster[(raster<=lowerBound) & (raster>=upperBound)] = np.nan  
             percValid = np.nansum(raster) / countTotal
 
             # Extract outliers from the crop raster
             outliers = self.crops[key]['crop']
-            outliers[outliers<=lowerBound] = np.nan
-            outliers[outliers>=upperBound] = np.nan        
+            outliers[(outliers>=lowerBound) & (outliers<=upperBound)] = np.nan  
 
             # Organize results in dictionary
             orDict[key]['Method'] = method
@@ -276,12 +271,43 @@ class wqp:
             orDict[key]['percOutliers'] = 1 - percValid
 
             # Save raster with no outliers
+            raster_collection[key] = self.create_dataset(raster[0],self.crops[key]['transform'])
+            outliers_collection[key] = self.create_dataset(outliers[0],self.crops[key]['transform'])
 #             orDict[key]['raster'] = wqp.create_dataset(raster, self.image.crs, self.crops[key]['transform'])
 #             orDict[key]['outliers'] = wqp.create_dataset(outliers, self.image.crs, self.crops[key]['transform'])
-        
-        return orDict
+            self.raster_collection = raster_collection
+            self.outliers_collection = outliers_collection
+            self.outliers_stats = orDict
+            
+    """
+    MERGE RASTER COLLECTIONS
+    """
+    def mergeRasterCollectionsExport(self, raster_collection, out_path):
+        if (len(raster_collection)>0):
+            raster_col_lst = []
+            for x in ['Lugano','Como','Maggiore']:
+                if x in list(raster_collection.keys()):
+                    raster_col_lst.append(raster_collection[x])
+            merged, transf = merge(raster_col_lst)
+#             merged[0][merged[0]<=0]=0
+            self.saveMergedImage(out_path,merged[0],transf)
+
+    """
+    SAVED MERGED COLLECTION
+    """
+    def saveMergedImage(self, out_path, data, transf):
+        profile = self.image.profile.copy()
+        profile.update({
+                'dtype': 'float32',
+                'height': data.shape[0],
+                'width': data.shape[1],
+                'transform': transf
+         })  
+
+        with rasterio.open(out_path, 'w', **profile) as dst:
+            dst.write_band(1, data)
     
-        
+    
     """
     CROP RASTER LAYER BY FEATURES
     """
