@@ -3,6 +3,7 @@
 """
 import math
 import os
+from datetime import datetime
 import pandas as pd
 import snappy
 from snappy import (ProgressMonitor, VectorDataNode,
@@ -49,6 +50,15 @@ class snapProduct:
         #TODO: update temperature parameters_C2RCC
         params_C2RCC[1]['temperature']= extractTemp(self.name, df_temp)
         return params_C2RCC
+    
+    def updateSNAPAtmCorr(self, df_atm, params_bandMaths):
+        #TODO: update temperature parameters_C2RCC
+        bExpresions = extractAtmCorr(self.name, df_atm)
+        params_bandMaths[1]['targetBands'][0]['expression'] = bExpresions['lswt_mid_high']
+        params_bandMaths[1]['targetBands'][1]['expression'] = bExpresions['lswt_high']
+        params_bandMaths[1]['targetBands'][2]['expression'] = bExpresions['lswt']
+        return params_bandMaths
+    
 
 """
 2. DEFINE THE INPUT PARAMETERS FOR THE PROCESSING
@@ -91,6 +101,24 @@ def extractTemp(name, df_temp):
         t = 0.1
     print('Date: {} \nTemperature: {}°C'.format(dateFormat,t))
     return t
+
+#Define function to extract the atmosferic correction parameters
+def extractAtmCorr(name, df_atm):
+    try:
+        refDate = datetime.strptime(name.split('_')[3], '%Y%m%d') 
+        df_check = df_atm.loc[df_atm['DateTime']==refDate.date()]
+        Lu = df_check.iloc[0].Lu
+        t = df_check.iloc[0].t
+        Ld = df_check.iloc[0].Ld
+        bExpression = dict()
+        bExpression['lswt_mid_high'] = f"if simile_laghi and not (cloud or cloud_confidence_mid or cloud_shadow_confidence_mid or cloud_shadow_confidence_high or cirrus_confidence_mid or cirrus_confidence_high) then (1321.08 / log(774.89/ ((('thermal_infrared_(tirs)_1')-{Lu}-{t} *(1-0.98)*{Ld})/({t} *0.98))+1)-273) else NaN"
+        bExpression['lswt_high'] = f"if simile_laghi and not (cloud or cloud_shadow_confidence_high or cirrus_confidence_high) then (1321.08 / log(774.89/ ((('thermal_infrared_(tirs)_1')-{Lu}-{t} *(1-0.98)*{Ld})/({t} *0.98))+1)-273) else NaN"
+        bExpression['lswt'] = f"(1321.08 / log(774.89/ ((('thermal_infrared_(tirs)_1')-{Lu}-{t} *(1-0.98)*{Ld})/({t} *0.98))+1)-273)"
+        print(f'Date: {refDate} \n Lu: {Lu}, t: {t}, Ld: {Ld}')
+    except:
+        print("There are no atmosferic correction parameters for the specified date")
+    return bExpression
+
 
 #Add processing parameters
 def setProcessingParameters(params):
